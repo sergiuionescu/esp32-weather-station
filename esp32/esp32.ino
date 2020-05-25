@@ -2,13 +2,20 @@
 #include "ESPAsyncWebServer.h"
 #include "AsyncJson.h"
 #include "ArduinoJson.h"
-#include "DHT12.h"
+#include "DHT.h"
 #include "Wire.h"
 #include "SPI.h"
 #include "Adafruit_BMP280.h"
 #include "MPU9250.h"
 #include "MAX44009.h"
+#include "HTTPClient.h"
 
+
+#define ONBOARD_LED  2
+#define DEBUG_DATA false
+
+#define DHTPIN 4
+#define DHTTYPE DHT22 
 
 const char* ssid     = "ESP32-weather-station";
 const char* password = "987654321";
@@ -42,18 +49,45 @@ IPAddress gateway(192,168,1,1);
 IPAddress subnet(255,255,255,0);
 
 AsyncWebServer server(80);
+HTTPClient http;
 
-DHT12 dht12;
+const char* fingerprint = "8D A7 F9 65 EC 5E FC 37 91 0F 1C 6E 59 FD C1 CC 6A 6E DE 16";
+const char* root_ca= \
+"-----BEGIN CERTIFICATE-----\n" \
+"MIIDQTCCAimgAwIBAgITBmyfz5m/jAo54vB4ikPmljZbyjANBgkqhkiG9w0BAQsF\n" \
+"ADA5MQswCQYDVQQGEwJVUzEPMA0GA1UEChMGQW1hem9uMRkwFwYDVQQDExBBbWF6\n" \
+"b24gUm9vdCBDQSAxMB4XDTE1MDUyNjAwMDAwMFoXDTM4MDExNzAwMDAwMFowOTEL\n" \
+"MAkGA1UEBhMCVVMxDzANBgNVBAoTBkFtYXpvbjEZMBcGA1UEAxMQQW1hem9uIFJv\n" \
+"b3QgQ0EgMTCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBALJ4gHHKeNXj\n" \
+"ca9HgFB0fW7Y14h29Jlo91ghYPl0hAEvrAIthtOgQ3pOsqTQNroBvo3bSMgHFzZM\n" \
+"9O6II8c+6zf1tRn4SWiw3te5djgdYZ6k/oI2peVKVuRF4fn9tBb6dNqcmzU5L/qw\n" \
+"IFAGbHrQgLKm+a/sRxmPUDgH3KKHOVj4utWp+UhnMJbulHheb4mjUcAwhmahRWa6\n" \
+"VOujw5H5SNz/0egwLX0tdHA114gk957EWW67c4cX8jJGKLhD+rcdqsq08p8kDi1L\n" \
+"93FcXmn/6pUCyziKrlA4b9v7LWIbxcceVOF34GfID5yHI9Y/QCB/IIDEgEw+OyQm\n" \
+"jgSubJrIqg0CAwEAAaNCMEAwDwYDVR0TAQH/BAUwAwEB/zAOBgNVHQ8BAf8EBAMC\n" \
+"AYYwHQYDVR0OBBYEFIQYzIU07LwMlJQuCFmcx7IQTgoIMA0GCSqGSIb3DQEBCwUA\n" \
+"A4IBAQCY8jdaQZChGsV2USggNiMOruYou6r4lK5IpDB/G/wkjUu0yKGX9rbxenDI\n" \
+"U5PMCCjjmCXPI6T53iHTfIUJrU6adTrCC2qJeHZERxhlbI1Bjjt/msv0tadQ1wUs\n" \
+"N+gDS63pYaACbvXy8MWy7Vu33PqUXHeeE6V/Uq2V8viTO96LXFvKWlJbYK8U90vv\n" \
+"o/ufQJVtMVT8QtPHRh8jrdkPSHCa2XV4cdFyQzR1bldZwgJcJmApzyMZFo6IQ6XU\n" \
+"5MsI+yMRQ+hDKXJioaldXgjUkK642M4UwtBV8ob2xJNDd2ZhwLnoQdeXeGADbkpy\n" \
+"rqXRfboQnoZsG4q5WTP468SQvvG5\n" \
+"-----END CERTIFICATE-----\n";
+
+DHT dht(DHTPIN, DHTTYPE);
 Adafruit_BMP280 bmp;
 MPU9250 MPU(Wire,0x68);
 MAX44009 max44009;
 
 int timeSinceLastRead = 0;
+int timeSinceLastUpload = 0;
 
 void setup() {
   Serial.begin(115200);
 
-  dht12.begin();
+  pinMode(ONBOARD_LED,OUTPUT);
+
+  dht.begin();
   if (!bmp.begin(0x76)) {
     Serial.println(F("Could not find a valid BMP280 sensor, check wiring!"));
     while (1);
@@ -101,14 +135,13 @@ void loop() {
   readMPU();
   readBmp();
   readMax44009();
-  readDhp12();
+  readDht();
+  uploadData();
 }
 
-void handleData(AsyncWebServerRequest *request) {
+String getTextData() {
   String responseText;
 
-  AsyncResponseStream *response = request->beginResponseStream("application/json");
-  
   const size_t capacity = JSON_OBJECT_SIZE(17);
   DynamicJsonDocument doc(capacity);
   
@@ -131,6 +164,14 @@ void handleData(AsyncWebServerRequest *request) {
   doc["lux"] = lux;
 
   serializeJson(doc, responseText);
+
+  return responseText;
+}
+
+void handleData(AsyncWebServerRequest *request) {
+  AsyncResponseStream *response = request->beginResponseStream("application/json");
+  
+  String responseText = getTextData();
   response->print(responseText);
   
   request->send(response);
@@ -218,41 +259,49 @@ void connectOrAp() {
   }
 }
 
-void readDhp12() {
-  bool dht12Read = true;
+float dewPoint(float temp, float humi) {
+  float k;
+  k = log(humi/100) + (17.62 * temp) / (243.12 + temp);
+  return 243.12 * k / (17.62 - k);
+}
+
+void readDht() {
+  bool dhtRead = true;
   if(timeSinceLastRead > 2000) {
-    float chk_temperature = dht12.readTemperature();
-    float chk_humidity = dht12.readHumidity();
+    float chk_temperature = dht.readTemperature();
+    float chk_humidity = dht.readHumidity();
    
     if (isnan(chk_temperature) || isnan(chk_humidity)) {
-      dht12Read = false;
-      Serial.println("Failed to read from DHT12 sensor!");
+      dhtRead = false;
+      Serial.println("Failed to read from DHT22 sensor!");
     }
      
-    if (dht12Read){
+    if (dhtRead){
       temperature = chk_temperature;
       humidity = chk_humidity;
-      heat_index = dht12.computeHeatIndex(temperature, humidity, false);
-      dew_point = dht12.dewPoint(temperature, humidity, false);
-       
-      Serial.print("DHT12=> Humidity: ");
-      Serial.print(humidity);
-      Serial.print(" %\t");
-      Serial.print("Temperature: ");
-      Serial.print(temperature);
-      Serial.print(" *C ");
-      Serial.print(" Heat index: ");
-      Serial.print(heat_index);
-      Serial.print(" *C ");
-      Serial.print(" Dew point: ");
-      Serial.print(dew_point);
-      Serial.print(" *C ");
-      Serial.print("\n");
+      heat_index = dht.computeHeatIndex(temperature, humidity, false);
+      dew_point = dewPoint(temperature, humidity);
+      if(DEBUG_DATA) {
+        Serial.print("DHT=> Humidity: ");
+        Serial.print(humidity);
+        Serial.print(" %\t");
+        Serial.print("Temperature: ");
+        Serial.print(temperature);
+        Serial.print(" *C ");
+        Serial.print(" Heat index: ");
+        Serial.print(heat_index);
+        Serial.print(" *C ");
+        Serial.print(" Dew point: ");
+        Serial.print(dew_point);
+        Serial.print(" *C ");
+        Serial.print("\n");
+      }  
     }
       timeSinceLastRead = 0;
     }
   delay(100);
   timeSinceLastRead += 100;
+  timeSinceLastUpload += 100;
   
 }
 
@@ -261,20 +310,21 @@ void readBmp() {
     bmp_temperature = bmp.readTemperature();
     pressure = bmp.readPressure();
     altitude = bmp.readAltitude(1013.25);
+    if(DEBUG_DATA) {
+      Serial.print(F("Temperature = "));
+      Serial.print(bmp_temperature);
+      Serial.print(" *C");
   
-    Serial.print(F("Temperature = "));
-    Serial.print(bmp_temperature);
-    Serial.print(" *C");
-
-    Serial.print(F(" Pressure = "));
-    Serial.print(pressure);
-    Serial.print(" Pa");
-
-    Serial.print(F(" Approx altitude = "));
-    Serial.print(altitude); 
-    Serial.print(" m");
-    Serial.print("\n");
-
+      Serial.print(F(" Pressure = "));
+      Serial.print(pressure);
+      Serial.print(" Pa");
+  
+      Serial.print(F(" Approx altitude = "));
+      Serial.print(altitude); 
+      Serial.print(" m");
+      Serial.print("\n");
+    }
+    
     delay(100);
   }
 }
@@ -294,30 +344,71 @@ void readMPU() {
   mag_z = MPU.getMagZ_uT();
 
   // display the data
-  Serial.print(MPU.getAccelX_mss(),6);
-  Serial.print("\t");
-  Serial.print(MPU.getAccelY_mss(),6);
-  Serial.print("\t");
-  Serial.print(MPU.getAccelZ_mss(),6);
-  Serial.print("\t");
-  Serial.print(MPU.getGyroX_rads(),6);
-  Serial.print("\t");
-  Serial.print(MPU.getGyroY_rads(),6);
-  Serial.print("\t");
-  Serial.print(MPU.getGyroZ_rads(),6);
-  Serial.print("\t");
-  Serial.print(MPU.getMagX_uT(),6);
-  Serial.print("\t");
-  Serial.print(MPU.getMagY_uT(),6);
-  Serial.print("\t");
-  Serial.print(MPU.getMagZ_uT(),6);
-  Serial.print("\t");
-  Serial.println(MPU.getTemperature_C(),6);
+  if(DEBUG_DATA) {
+    Serial.print(MPU.getAccelX_mss(),6);
+    Serial.print("\t");
+    Serial.print(MPU.getAccelY_mss(),6);
+    Serial.print("\t");
+    Serial.print(MPU.getAccelZ_mss(),6);
+    Serial.print("\t");
+    Serial.print(MPU.getGyroX_rads(),6);
+    Serial.print("\t");
+    Serial.print(MPU.getGyroY_rads(),6);
+    Serial.print("\t");
+    Serial.print(MPU.getGyroZ_rads(),6);
+    Serial.print("\t");
+    Serial.print(MPU.getMagX_uT(),6);
+    Serial.print("\t");
+    Serial.print(MPU.getMagY_uT(),6);
+    Serial.print("\t");
+    Serial.print(MPU.getMagZ_uT(),6);
+    Serial.print("\t");
+    Serial.println(MPU.getTemperature_C(),6);
+  }
   delay(20);
 }
 
 void readMax44009() {
   lux = max44009.get_lux();
-  Serial.print("Light (lux):    ");
-  Serial.println(lux);
+  if(DEBUG_DATA) {
+    Serial.print("Light (lux):    ");
+    Serial.println(lux);
+  }
+}
+
+void uploadData() {
+  if(timeSinceLastUpload > 900000) {
+    digitalWrite(ONBOARD_LED,HIGH);
+    
+    WiFiClientSecure client;
+    client.setCACert(root_ca);
+
+    String textData = getTextData();
+
+    if (!client.connect("diorkltsp0.execute-api.eu-central-1.amazonaws.com", 443)){
+        Serial.println("Connection failed!");
+    } else {
+      client.println("POST /prod/public/data-source HTTP/1.1");
+      client.println("Host: diorkltsp0.execute-api.eu-central-1.amazonaws.com");
+      client.println("Content-Type: application/json");
+      client.print("Content-Length: ");
+      client.println(textData.length());
+      client.println();
+      client.println(textData);
+      client.println();
+
+      while (!client.available()){
+          delay(50); //
+          Serial.print(".");
+      }  
+      /* if data is available then receive and print to Terminal */
+      while (client.available()) {
+          char c = client.read();
+          Serial.write(c);
+      }
+    }
+    
+    digitalWrite(ONBOARD_LED,LOW);
+    timeSinceLastUpload = 0;
+  } 
 }
