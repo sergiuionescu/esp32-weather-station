@@ -79,6 +79,7 @@ Adafruit_BMP280 bmp;
 MPU9250 MPU(Wire,0x68);
 MAX44009 max44009;
 
+int timeSinceLastWifiCheck = 0;
 int timeSinceLastRead = 0;
 int timeSinceLastUpload = 0;
 
@@ -129,14 +130,27 @@ void setup() {
   server.begin();
 
   Serial.println("Setup done");
+  digitalWrite(ONBOARD_LED,HIGH);
+  delay(500);
+  digitalWrite(ONBOARD_LED,LOW);
+  delay(500);
+  digitalWrite(ONBOARD_LED,HIGH);
+  delay(500);
+  digitalWrite(ONBOARD_LED,LOW);
 }
 
 void loop() {
+  checkWifi();
   readMPU();
   readBmp();
   readMax44009();
   readDht();
   uploadData();
+  
+  delay(100);
+  timeSinceLastRead += 100;
+  timeSinceLastUpload += 100;
+  timeSinceLastWifiCheck += 100;
 }
 
 String getTextData() {
@@ -295,14 +309,10 @@ void readDht() {
         Serial.print(dew_point);
         Serial.print(" *C ");
         Serial.print("\n");
-      }  
+      }
     }
-      timeSinceLastRead = 0;
-    }
-  delay(100);
-  timeSinceLastRead += 100;
-  timeSinceLastUpload += 100;
-  
+    timeSinceLastRead = 0;
+    } 
 }
 
 void readBmp() {
@@ -411,4 +421,15 @@ void uploadData() {
     digitalWrite(ONBOARD_LED,LOW);
     timeSinceLastUpload = 0;
   } 
+}
+
+void checkWifi() {
+  if (timeSinceLastWifiCheck > 120000) {
+    Serial.print("Wifi check...\n");
+    if(WiFi.status() != WL_CONNECTED) {
+      Serial.print("No Wifi! Restarting...");
+      ESP.restart();  
+    }
+    timeSinceLastWifiCheck = 0;
+  }
 }
