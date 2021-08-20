@@ -44,6 +44,9 @@ float mag_z;
 
 float lux;
 
+bool onboardLed = false;
+bool isWifiConnected = false;
+
 IPAddress local_ip(192,168,1,1);
 IPAddress gateway(192,168,1,1);
 IPAddress subnet(255,255,255,0);
@@ -82,11 +85,12 @@ MAX44009 max44009;
 int timeSinceLastWifiCheck = 0;
 int timeSinceLastRead = 0;
 int timeSinceLastUpload = 0;
+int timeSinceWifiAp = 0;
 
 void setup() {
   Serial.begin(115200);
 
-  pinMode(ONBOARD_LED,OUTPUT);
+  pinMode(ONBOARD_LED, OUTPUT);
 
   dht.begin();
   if (!bmp.begin(0x76)) {
@@ -137,6 +141,9 @@ void setup() {
   digitalWrite(ONBOARD_LED,HIGH);
   delay(500);
   digitalWrite(ONBOARD_LED,LOW);
+  if(!isWifiConnected) {
+    digitalWrite(ONBOARD_LED,HIGH);
+  }
 }
 
 void loop() {
@@ -151,6 +158,7 @@ void loop() {
   timeSinceLastRead += 100;
   timeSinceLastUpload += 100;
   timeSinceLastWifiCheck += 100;
+  timeSinceWifiAp += 100;
 }
 
 String getTextData() {
@@ -251,11 +259,24 @@ void connectOrAp() {
       delay(100);
       break;
     }
-    delay(500);
+    onboardLed = !onboardLed;
+    if(onboardLed) {
+      digitalWrite(ONBOARD_LED,HIGH);
+    } else {
+      digitalWrite(ONBOARD_LED,LOW);
+    }
+    
+    delay(1000);
     Serial.println("Connecting to previous WiFi..");
   }
+  onboardLed = false;
+  digitalWrite(ONBOARD_LED,LOW);
 
   if(WiFi.status() != WL_CONNECTED) {
+    onboardLed = true;
+    isWifiConnected = false;
+    digitalWrite(ONBOARD_LED,HIGH);
+    
     WiFi.mode(WIFI_AP);
     WiFi.disconnect();
     delay(100);
@@ -268,6 +289,7 @@ void connectOrAp() {
     WiFi.softAPConfig(local_ip, gateway, subnet);
     delay(100);
   } else {
+    isWifiConnected = true;
     Serial.println(WiFi.localIP());
     Serial.println(WiFi.gatewayIP().toString());
   }
@@ -424,12 +446,17 @@ void uploadData() {
 }
 
 void checkWifi() {
-  if (timeSinceLastWifiCheck > 120000) {
+  if (timeSinceLastWifiCheck > 300000) {
     Serial.print("Wifi check...\n");
     if(WiFi.status() != WL_CONNECTED) {
       Serial.print("No Wifi! Restarting...");
       ESP.restart();  
     }
     timeSinceLastWifiCheck = 0;
+  }
+
+  if (timeSinceWifiAp > 120000 && !isWifiConnected) {
+    Serial.print("No Wifi or input! Restarting...");
+    ESP.restart();  
   }
 }
