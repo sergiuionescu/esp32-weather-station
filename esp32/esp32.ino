@@ -20,27 +20,27 @@
 const char* ssid     = "ESP32-weather-station";
 const char* password = "987654321";
 
-String wifi_ssid;
-String wifi_password;
+String wifiSSID;
+String wifiPassword;
 
 float temperature;
 float humidity;
-float heat_index;
-float dew_point;
+float heatIndex;
+float dewPoint;
 
-float bmp_temperature;
+float bmpTemperature;
 float pressure;
 float altitude;
 
-float accel_x;
-float accel_y;
-float accel_z;
-float gyro_x;
-float gyro_y;
-float gyro_z;
-float mag_x;
-float mag_y;
-float mag_z;
+float accelX;
+float accelY;
+float accelZ;
+float gyroX;
+float gyroY;
+float gyroZ;
+float magX;
+float magY;
+float magZ;
 
 float lux;
 
@@ -169,20 +169,20 @@ String getTextData() {
   
   doc["temperature"] = temperature;
   doc["humidity"] = humidity;
-  doc["heat_index"] = heat_index;
-  doc["dew_point"] = dew_point;
-  doc["bmp_temperature"] = bmp_temperature;
+  doc["heat_index"] = heatIndex;
+  doc["dew_point"] = dewPoint;
+  doc["bmp_temperature"] = bmpTemperature;
   doc["pressure"] = pressure;
   doc["altitude"] = altitude;
-  doc["accel_x"] = accel_x;
-  doc["accel_y"] = accel_y;
-  doc["accel_z"] = accel_z;
-  doc["gyro_x"] = gyro_x;
-  doc["gyro_y"] = gyro_y;
-  doc["gyro_z"] = gyro_z;
-  doc["mag_x"] = mag_x;
-  doc["mag_y"] = mag_y;
-  doc["mag_z"] = mag_z;
+  doc["accel_x"] = accelX;
+  doc["accel_y"] = accelY;
+  doc["accel_z"] = accelZ;
+  doc["gyro_x"] = gyroX;
+  doc["gyro_y"] = gyroY;
+  doc["gyro_z"] = gyroZ;
+  doc["mag_x"] = magX;
+  doc["mag_y"] = magY;
+  doc["mag_z"] = magZ;
   doc["lux"] = lux;
 
   serializeJson(doc, responseText);
@@ -204,18 +204,18 @@ void handleConnect(AsyncWebServerRequest *request) {
   for(int i=0;i<params;i++){
     AsyncWebParameter* param = request->getParam(i);
     if(param->name() == "ssid") {
-      wifi_ssid = param->value();
+      wifiSSID = param->value();
     }
     if(param->name() == "password") {
-      wifi_password = param->value();
+      wifiPassword = param->value();
     }
   }
 
-  Serial.println(wifi_ssid.c_str());
+  Serial.println(wifiSSID.c_str());
 
   WiFi.disconnect();
   delay(100);
-  WiFi.begin(wifi_ssid.c_str(), wifi_password.c_str());
+  WiFi.begin(wifiSSID.c_str(), wifiPassword.c_str());
 
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
@@ -295,7 +295,7 @@ void connectOrAp() {
   }
 }
 
-float dewPoint(float temp, float humi) {
+float calculateDewPoint(float temp, float humi) {
   float k;
   k = log(humi/100) + (17.62 * temp) / (243.12 + temp);
   return 243.12 * k / (17.62 - k);
@@ -315,8 +315,8 @@ void readDht() {
     if (dhtRead){
       temperature = chk_temperature;
       humidity = chk_humidity;
-      heat_index = dht.computeHeatIndex(temperature, humidity, false);
-      dew_point = dewPoint(temperature, humidity);
+      heatIndex = dht.computeHeatIndex(temperature, humidity, false);
+      dewPoint = calculateDewPoint(temperature, humidity);
       if(DEBUG_DATA) {
         Serial.print("DHT=> Humidity: ");
         Serial.print(humidity);
@@ -325,10 +325,10 @@ void readDht() {
         Serial.print(temperature);
         Serial.print(" *C ");
         Serial.print(" Heat index: ");
-        Serial.print(heat_index);
+        Serial.print(heatIndex);
         Serial.print(" *C ");
         Serial.print(" Dew point: ");
-        Serial.print(dew_point);
+        Serial.print(dewPoint);
         Serial.print(" *C ");
         Serial.print("\n");
       }
@@ -339,12 +339,12 @@ void readDht() {
 
 void readBmp() {
   if(timeSinceLastRead > 2000) {
-    bmp_temperature = bmp.readTemperature();
+    bmpTemperature = bmp.readTemperature();
     pressure = bmp.readPressure();
     altitude = bmp.readAltitude(1013.25);
     if(DEBUG_DATA) {
       Serial.print(F("Temperature = "));
-      Serial.print(bmp_temperature);
+      Serial.print(bmpTemperature);
       Serial.print(" *C");
   
       Serial.print(F(" Pressure = "));
@@ -365,15 +365,15 @@ void readMPU() {
   // read the sensor
   MPU.readSensor();
 
-  accel_x = MPU.getAccelX_mss();
-  accel_y = MPU.getAccelY_mss();
-  accel_z = MPU.getAccelZ_mss();
-  gyro_x = MPU.getGyroX_rads();
-  gyro_y = MPU.getGyroY_rads();
-  gyro_z = MPU.getGyroZ_rads();
-  mag_x = MPU.getMagX_uT();
-  mag_y = MPU.getMagY_uT();
-  mag_z = MPU.getMagZ_uT();
+  accelX = MPU.getAccelX_mss();
+  accelY = MPU.getAccelY_mss();
+  accelZ = MPU.getAccelZ_mss();
+  gyroX = MPU.getGyroX_rads();
+  gyroY = MPU.getGyroY_rads();
+  gyroZ = MPU.getGyroZ_rads();
+  magX = MPU.getMagX_uT();
+  magY = MPU.getMagY_uT();
+  magZ = MPU.getMagZ_uT();
 
   // display the data
   if(DEBUG_DATA) {
@@ -418,7 +418,8 @@ void uploadData() {
     String textData = getTextData();
 
     if (!client.connect("diorkltsp0.execute-api.eu-central-1.amazonaws.com", 443)){
-        Serial.println("Connection failed!");
+        Serial.println("Connection failed! Probably bad connection. Restarting...");
+        ESP.restart();
     } else {
       client.println("POST /prod/public/data-source HTTP/1.1");
       client.println("Host: diorkltsp0.execute-api.eu-central-1.amazonaws.com");
