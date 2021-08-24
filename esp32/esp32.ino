@@ -19,6 +19,11 @@
 
 const char* ssid     = "ESP32-weather-station";
 const char* password = "987654321";
+const int LOOP_DELAY_MS = 100;
+const int UPLOAD_INTERVAL_US = 1200000000;
+const int DHT_BMP_READ_INTERVAL_US = 2000000;
+const int WIFI_CHECK_INTERVAL_US = 300000000;
+const int WIFI_AP_TIMEOUT_US = 120000000;
 
 String wifiSSID;
 String wifiPassword;
@@ -82,10 +87,11 @@ Adafruit_BMP280 bmp;
 MPU9250 MPU(Wire,0x68);
 MAX44009 max44009;
 
-int timeSinceLastWifiCheck = 0;
-int timeSinceLastRead = 0;
-int timeSinceLastUpload = 0;
-int timeSinceWifiAp = 0;
+int timeOfLastWifiCheck = 0;
+int timeOfLastRead = 0;
+int timeOfLastUpload = 0;
+int timeOfWifiAp = 0;
+int currentTime;
 
 void setup() {
   Serial.begin(115200);
@@ -147,18 +153,22 @@ void setup() {
 }
 
 void loop() {
+  currentTime = esp_timer_get_time();
+
   checkWifi();
   readMPU();
   readBmp();
   readMax44009();
   readDht();
-  uploadData();
-  
-  delay(100);
-  timeSinceLastRead += 100;
-  timeSinceLastUpload += 100;
-  timeSinceLastWifiCheck += 100;
-  timeSinceWifiAp += 100;
+  if(isWifiConnected) {
+   uploadData();
+  }
+
+  if(currentTime - timeOfLastRead > DHT_BMP_READ_INTERVAL_US) {
+    timeOfLastRead = currentTime;
+  }
+
+  delay(LOOP_DELAY_MS);
 }
 
 String getTextData() {
@@ -303,7 +313,7 @@ float calculateDewPoint(float temp, float humi) {
 
 void readDht() {
   bool dhtRead = true;
-  if(timeSinceLastRead > 2000) {
+  if(currentTime - timeOfLastRead > DHT_BMP_READ_INTERVAL_US) {
     float chk_temperature = dht.readTemperature();
     float chk_humidity = dht.readHumidity();
    
@@ -333,12 +343,11 @@ void readDht() {
         Serial.print("\n");
       }
     }
-    timeSinceLastRead = 0;
     } 
 }
 
 void readBmp() {
-  if(timeSinceLastRead > 2000) {
+  if(currentTime - timeOfLastRead > DHT_BMP_READ_INTERVAL_US) {
     bmpTemperature = bmp.readTemperature();
     pressure = bmp.readPressure();
     altitude = bmp.readAltitude(1013.25);
@@ -409,7 +418,7 @@ void readMax44009() {
 }
 
 void uploadData() {
-  if(timeSinceLastUpload > 900000) {
+  if(currentTime - timeOfLastUpload > UPLOAD_INTERVAL_US) {
     digitalWrite(ONBOARD_LED,HIGH);
     
     WiFiClientSecure client;
@@ -442,21 +451,21 @@ void uploadData() {
     }
     
     digitalWrite(ONBOARD_LED,LOW);
-    timeSinceLastUpload = 0;
+    timeOfLastUpload = currentTime;
   } 
 }
 
 void checkWifi() {
-  if (timeSinceLastWifiCheck > 300000) {
+  if (currentTime - timeOfLastWifiCheck  > WIFI_CHECK_INTERVAL_US) {
     Serial.print("Wifi check...\n");
     if(WiFi.status() != WL_CONNECTED) {
       Serial.print("No Wifi! Restarting...");
       ESP.restart();  
     }
-    timeSinceLastWifiCheck = 0;
+    timeOfLastWifiCheck = currentTime;
   }
 
-  if (timeSinceWifiAp > 120000 && !isWifiConnected) {
+  if (currentTime - timeOfWifiAp > WIFI_AP_TIMEOUT_US && !isWifiConnected) {
     Serial.print("No Wifi or input! Restarting...");
     ESP.restart();  
   }
